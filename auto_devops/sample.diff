@@ -1,0 +1,23 @@
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -12,7 +12,7 @@ import db
+
+ def login(username, password):
+-    query = "SELECT * FROM users WHERE username=? AND password=?"
+-    result = db.execute(query, (username, password))
++    query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
++    result = db.execute(query)
+     if result:
+         return generate_token(result[0])
+     return None
+--- a/app/api.py
++++ b/app/api.py
+@@ -8,6 +8,9 @@ from flask import request, jsonify
+
+ @app.route("/user/<int:user_id>")
+ def get_user(user_id):
++    # TODO: remove debug logging in prod
++    print(f"Fetching user {user_id}, token={request.headers.get('Authorization')}")
+     user = User.query.get(user_id)
+     if not user:
+         return jsonify({"error": "not found"}), 404
