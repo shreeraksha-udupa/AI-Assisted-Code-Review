@@ -417,26 +417,40 @@ with st.sidebar:
     <div class="brand-header">
         <div class="brand-icon">🛡️</div>
         <div class="brand-text">
-            <h1>Auto-DevOps</h1>
+            <h1>AI-Assisted Code Review with Repository-Wide Context Awareness</h1>
             <p>Self-Healing Code Reviewer</p>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown('<div class="section-heading">⚙️ Configuration</div>', unsafe_allow_html=True)
+    #st.markdown('<div class="section-heading">⚙️ Configuration</div>', unsafe_allow_html=True)
 
-    groq_key = st.text_input(
-        "Groq API Key",
-        type="password",
-        placeholder="gsk_...",
-        help="Get your free key at console.groq.com"
-    )
+    # ── Read API key and model from settings/env — NOT from UI ──────────────
+    sys.path.insert(0, os.path.dirname(__file__))
+    import config.settings as _cfg
+    groq_key    = _cfg.GROQ_API_KEY or os.getenv("GROQ_API_KEY", "")
+    model_choice = _cfg.MODEL
 
-    model_choice = st.selectbox(
-        "Model",
-        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
-        help="llama-3.3-70b gives best review quality"
-    )
+    # if groq_key:
+    #     masked = groq_key[:8] + "••••••••" + groq_key[-4:] if len(groq_key) > 12 else "••••••••"
+    #     st.markdown(
+    #         f'✅ <span style="color:#4ade80;font-size:0.82rem">API key loaded from .env</span>'
+    #         f'<br><span style="font-family:monospace;font-size:0.75rem;color:#475569">{masked}</span>',
+    #         unsafe_allow_html=True
+    #     )
+    # else:
+    #     st.markdown(
+    #         '❌ <span style="color:#f87171;font-size:0.82rem">GROQ_API_KEY not found</span>'
+    #         '<br><span style="font-size:0.75rem;color:#64748b">Add it to your .env file</span>',
+    #         unsafe_allow_html=True
+    #     )
+
+    # st.markdown(
+    #     f'<span style="font-size:0.78rem;color:#64748b">Model: </span>'
+    #     f'<span style="font-family:monospace;font-size:0.78rem;color:#a5b4fc">{model_choice}</span>'
+    #     f'<br><span style="font-size:0.72rem;color:#334155">Change in config/settings.py</span>',
+    #     unsafe_allow_html=True
+    # )
 
     st.markdown('<div class="section-heading">📦 Repository</div>', unsafe_allow_html=True)
 
@@ -453,11 +467,29 @@ with st.sidebar:
         do_ingest = st.button("⬇️ Ingest Repo", use_container_width=True, type="primary")
     with col2:
         if st.button("🗑️ Clear DB", use_container_width=True):
-            import shutil
-            if os.path.exists("./chroma_db"):
-                shutil.rmtree("./chroma_db")
-            st.session_state.ingestion_done = False
-            st.success("ChromaDB cleared")
+            import shutil, gc
+            # Close any open ChromaDB connections before deleting.
+            # On Windows, ChromaDB holds an exclusive lock on its SQLite
+            # file — deleting while it's open raises PermissionError 32.
+            try:
+                import chromadb
+                # Force-close by creating a throwaway client whose destructor
+                # flushes and closes the underlying DuckDB/SQLite handle.
+                _tmp = chromadb.PersistentClient(path="./chroma_db")
+                del _tmp
+                gc.collect()
+            except Exception:
+                pass
+            try:
+                if os.path.exists("./chroma_db"):
+                    shutil.rmtree("./chroma_db", ignore_errors=True)
+                st.session_state.ingestion_done = False
+                st.success("ChromaDB cleared")
+            except PermissionError:
+                st.warning(
+                    "Could not delete chroma_db while it is in use. "
+                    "Please stop the app, manually delete the chroma_db/ folder, then restart."
+                )
 
     if st.session_state.ingestion_done:
         st.markdown('✅ <span style="color:#4ade80;font-size:0.82rem">Vector DB ready</span>', unsafe_allow_html=True)
@@ -466,20 +498,18 @@ with st.sidebar:
 
     st.markdown('<div class="section-heading">🔧 Agent Settings</div>', unsafe_allow_html=True)
 
-    top_k = st.slider("RAG top-K chunks", 3, 10, 5, help="How many similar code chunks to retrieve")
+    top_k = st.slider("RAG top-K chunks", 1, 10, 5, help="How many similar code chunks to retrieve from ChromaDB")
     auto_fix = st.checkbox("Enable auto-fix", value=True, help="Attempt to apply fixes for critical/high issues")
     run_tests_flag = st.checkbox("Run tests after fix", value=True)
 
-    st.markdown("---")
-    st.markdown('<p style="font-size:0.72rem;color:#334155;text-align:center">Powered by Groq + ChromaDB + sentence-transformers</p>', unsafe_allow_html=True)
+    #st.markdown("---")
+    #st.markdown('<p style="font-size:0.72rem;color:#334155;text-align:center">Powered by Groq + ChromaDB + sentence-transformers</p>', unsafe_allow_html=True)
 
 # ── Ingestion handler ─────────────────────────────────────────────────────────
 if do_ingest:
     if not groq_key:
-        st.sidebar.error("Enter your Groq API key first")
+        st.sidebar.error("GROQ_API_KEY not found. Add it to your .env file and restart the app.")
     else:
-        os.environ["GROQ_API_KEY"] = groq_key
-
         with st.sidebar:
             ingest_bar = st.progress(0, text="Starting ingestion...")
 
@@ -530,26 +560,26 @@ with tab_input:
     with col_left:
         st.markdown('<div class="section-heading">📋 Paste Diff</div>', unsafe_allow_html=True)
 
-        sample_choice = st.radio(
-            "Load a sample diff",
-            ["✏️ Paste my own diff", "🐛 Buggy diff (SQL injection demo)", "✅ Clean diff (no issues demo)"],
-            index=0,
-            horizontal=False,
-        )
+        # sample_choice = st.radio(
+        #     "Load a sample diff",
+        #     ["✏️ Paste my own diff", "🐛 Buggy diff (SQL injection demo)", "✅ Clean diff (no issues demo)"],
+        #     index=0,
+        #     horizontal=False,
+        # )
 
-        if sample_choice == "🐛 Buggy diff (SQL injection demo)":
-            diff_text = SAMPLE_DIFF
-            st.markdown(render_diff(SAMPLE_DIFF), unsafe_allow_html=True)
-        elif sample_choice == "✅ Clean diff (no issues demo)":
-            diff_text = CLEAN_SAMPLE_DIFF
-            st.markdown(render_diff(CLEAN_SAMPLE_DIFF), unsafe_allow_html=True)
-        else:
-            diff_text = st.text_area(
-                "Unified diff",
-                height=380,
-                placeholder="Paste your git diff here...\n\n--- a/file.py\n+++ b/file.py\n@@...",
-                label_visibility="collapsed"
-            )
+        # if sample_choice == "🐛 Buggy diff (SQL injection demo)":
+        #     diff_text = SAMPLE_DIFF
+        #     st.markdown(render_diff(SAMPLE_DIFF), unsafe_allow_html=True)
+        # elif sample_choice == "✅ Clean diff (no issues demo)":
+        #     diff_text = CLEAN_SAMPLE_DIFF
+        #     st.markdown(render_diff(CLEAN_SAMPLE_DIFF), unsafe_allow_html=True)
+        # else:
+        diff_text = st.text_area(
+            "Unified diff",
+            height=380,
+            placeholder="Paste your git diff here...\n\n--- a/file.py\n+++ b/file.py\n@@...",
+            label_visibility="collapsed"
+        )
 
         st.markdown('<div style="height:1rem"></div>', unsafe_allow_html=True)
 
@@ -599,13 +629,12 @@ with tab_input:
 # ── Run the agent ─────────────────────────────────────────────────────────────
 if run_review:
     if not groq_key:
-        st.error("⚠️ Enter your Groq API key in the sidebar first.")
+        st.error("⚠️ GROQ_API_KEY not found. Add it to your .env file and restart the app.")
     elif not diff_text or not diff_text.strip():
-        st.error("⚠️ Please paste a diff or enable the sample diff.")
+        st.error("⚠️ Please paste a diff or select a sample diff.")
     elif not st.session_state.ingestion_done:
         st.warning("⚠️ Repo not ingested yet. Click **⬇️ Ingest Repo** in the sidebar first.")
     else:
-        os.environ["GROQ_API_KEY"] = groq_key
         st.session_state.running = True
         st.session_state.log_lines = []
         st.session_state.step_states = {i: "pending" for i in range(1, 9)}
@@ -621,9 +650,7 @@ if run_review:
         from retrieval.retriever import retrieve_context, get_collection
         import config.settings as cfg
 
-        # Patch settings at runtime
-        cfg.GROQ_API_KEY = groq_key
-        cfg.MODEL = model_choice
+        # Only patch top_k from UI — key and model come from settings.py
         cfg.RETRIEVAL_TOP_K = top_k
 
         state = {
